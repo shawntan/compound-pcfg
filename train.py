@@ -117,9 +117,9 @@ def main(args):
       inp, inp_len, trg, trg_len = data
       inp = inp.to('cuda' if args.cuda else 'cpu').permute(1, 0)
       trg = trg.to('cuda' if args.cuda else 'cpu')
-      print(' '.join(trg_id2w[w] for w in trg[0]))
       optimizer.zero_grad()
       nll, kl, binary_matrix, argmax_spans = model(inp, trg, argmax=True)
+      print(model.sample(inp))
       (nll+kl).mean().backward()
       train_nll += nll.sum().item()
       train_kl += kl.sum().item()
