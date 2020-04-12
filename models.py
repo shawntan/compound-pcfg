@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from PCFG import PCFG
 from random import shuffle
+from ordered_memory import OrderedMemory
 
 class ResidualLayer(nn.Module):
   def __init__(self, in_dim = 100,
@@ -16,13 +17,16 @@ class ResidualLayer(nn.Module):
     return F.relu(self.lin2(F.relu(self.lin1(x)))) + x
 
 class CompPCFG(nn.Module):
-  def __init__(self, vocab = 100,
+  def __init__(self,
+               in_vocab = 100,
+               out_vocab = 100,
                h_dim = 512, 
                w_dim = 512,
                z_dim = 64,
                state_dim = 256, 
                t_states = 10,
-               nt_states = 10):
+               nt_states = 10,
+               inp_padding_idx=0):
     super(CompPCFG, self).__init__()
     self.state_dim = state_dim
     self.t_emb = nn.Parameter(torch.randn(t_states, state_dim))
@@ -41,43 +45,33 @@ class CompPCFG(nn.Module):
                                   ResidualLayer(state_dim, state_dim),
                                   ResidualLayer(state_dim, state_dim),                         
                                   nn.Linear(state_dim, self.nt_states))
-    if z_dim > 0:
-      self.enc_emb = nn.Embedding(vocab, w_dim)
-      self.enc_rnn = nn.LSTM(w_dim, h_dim, bidirectional=True, num_layers = 1, batch_first = True)
-      self.enc_params = nn.Linear(h_dim*2, z_dim*2)
+
+    self.encoder = OrderedMemory(z_dim, z_dim,
+                                 nslot=10, ntokens=in_vocab,
+                                 padding_idx=inp_padding_idx)
+
     self.z_dim = z_dim
     self.vocab_mlp = nn.Sequential(nn.Linear(z_dim + state_dim, state_dim),
                                    ResidualLayer(state_dim, state_dim),
                                    ResidualLayer(state_dim, state_dim),
-                                   nn.Linear(state_dim, vocab))
+                                   nn.Linear(state_dim, out_vocab))
       
   def enc(self, x):
-    emb = self.enc_emb(x)
-    h, _ = self.enc_rnn(emb)    
-    params = self.enc_params(h.max(1)[0])
-    mean = params[:, :self.z_dim]
-    logvar = params[:, self.z_dim:]    
-    return mean, logvar
+      (final_state,
+       flattened_internal, flattened_internal_mask,
+       rnned_X, X_emb, mask) = self.encoder(x)
+      return final_state
 
   def kl(self, mean, logvar):
     result =  -0.5 * (logvar - torch.pow(mean, 2)- torch.exp(logvar) + 1)
     return result
 
-  def forward(self, x, argmax=False, use_mean=False):
+  def forward(self, inp, trg, argmax=False, use_mean=False):
     #x : batch x n
-    n = x.size(1)
-    batch_size = x.size(0)
-    if self.z_dim > 0:
-      mean, logvar = self.enc(x)
-      kl = self.kl(mean, logvar).sum(1) 
-      z = mean.new(batch_size, mean.size(1)).normal_(0, 1)
-      z = (0.5*logvar).exp()*z + mean    
-      kl = self.kl(mean, logvar).sum(1) 
-      if use_mean:
-        z = mean
-      self.z = z
-    else:
-      self.z = torch.zeros(batch_size, 1).cuda()
+    n = inp.size(1)
+    batch_size = inp.size(0)
+    z = self.enc(inp)
+    self.z = z
 
     t_emb = self.t_emb
     nt_emb = self.nt_emb
@@ -96,13 +90,12 @@ class CompPCFG(nn.Module):
                                                          self.z_dim)], 2)
     root_scores = F.log_softmax(self.root_mlp(root_emb), 1)
     unary_scores = F.log_softmax(self.vocab_mlp(t_emb), 3)
-    x_expand = x.unsqueeze(2).expand(batch_size, x.size(1), self.t_states).unsqueeze(3)
+    x_expand = inp.unsqueeze(2).expand(batch_size, n, self.t_states).unsqueeze(3)
     unary = torch.gather(unary_scores, 3, x_expand).squeeze(3)
     rule_score = F.log_softmax(self.rule_mlp(nt_emb), 2) # nt x t**2
     rule_scores = rule_score.view(batch_size, self.nt_states, self.all_states, self.all_states)
     log_Z = self.pcfg._inside(unary, rule_scores, root_scores)
-    if self.z_dim == 0:
-      kl = torch.zeros_like(log_Z)
+    kl = torch.zeros_like(log_Z)
     if argmax:
       with torch.no_grad():
         max_score, binary_matrix, spans = self.pcfg._viterbi(unary, rule_scores, root_scores)
