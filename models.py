@@ -90,10 +90,14 @@ class CompPCFG(nn.Module):
                                                          self.z_dim)], 2)
     root_scores = F.log_softmax(self.root_mlp(root_emb), 1)
     unary_scores = F.log_softmax(self.vocab_mlp(t_emb), 3)
+    print("unary", unary_scores.size())
     x_expand = trg.unsqueeze(2).expand(batch_size, n, self.t_states).unsqueeze(3)
     unary = torch.gather(unary_scores, 3, x_expand).squeeze(3)
     rule_score = F.log_softmax(self.rule_mlp(nt_emb), 2) # nt x t**2
     rule_scores = rule_score.view(batch_size, self.nt_states, self.all_states, self.all_states)
+    print("root_scores", root_scores.size())
+    print("rule", rule_scores.size())
+
     log_Z = self.pcfg._inside(unary, rule_scores, root_scores)
     kl = torch.zeros_like(log_Z)
     if argmax:
