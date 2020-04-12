@@ -30,9 +30,9 @@ class Dataset(data.Dataset):
         #tokens = nltk.tokenize.word_tokenize(sequence.lower())
         tokens = sequence.lower().split()
         sequence = []
-        sequence.append(word2id.get('<start>', -1))
+        # sequence.append(word2id.get('<start>', -1))
         sequence.extend([word2id[token] for token in tokens if token in word2id])
-        sequence.append(word2id.get('<end>', -2))
+        # sequence.append(word2id.get('<end>', -2))
         sequence = torch.Tensor(sequence)
         return sequence
 
