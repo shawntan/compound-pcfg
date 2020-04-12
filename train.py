@@ -46,7 +46,6 @@ parser.add_argument('--beta2', default=0.999, type=float, help='beta2 for adam')
 parser.add_argument('--gpu', default=0, type=int, help='which gpu to use')
 parser.add_argument('--seed', default=3435, type=int, help='random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
-
 def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
@@ -54,9 +53,9 @@ def main(args):
   src_path_train = 'data/length/train_wo_valid_random.src'
   trg_path_train = 'data/length/train_wo_valid_random.trg'
 
-  src_vocab = set(w.lower() for l in open(args.src_path_train)
+  src_vocab = set(w.lower() for l in open(src_path_train)
                   for w in l.strip().split())
-  trg_vocab = set(w.lower() for l in open(args.trg_path_train)
+  trg_vocab = set(w.lower() for l in open(trg_path_train)
                   for w in l.strip().split())
   src_vocab.update(['<pad>', '<start>', '<end>', '<unk>'])
   src_id2w = list(src_vocab)
@@ -70,7 +69,7 @@ def main(args):
   train_data = data_loader.get_loader(
       src_path_train, trg_path_train,
       src_w2id, trg_w2id,
-      batch_size=4
+      batch_size=1
   )
   # val_data = Dataset(args.val_file)
   # train_sents = train_data.batch_size.sum()
@@ -117,7 +116,7 @@ def main(args):
       b += 1
       inp, inp_len, trg, trg_len = data
       inp = inp.to('cuda' if args.cuda else 'cpu').permute(1, 0)
-      trg = trg.to('cuda' if args.cuda else 'cpu').permute(1, 0)
+      trg = trg.to('cuda' if args.cuda else 'cpu')
       optimizer.zero_grad()
       nll, kl, binary_matrix, argmax_spans = model(inp, trg, argmax=True)
       (nll+kl).mean().backward()
@@ -132,12 +131,11 @@ def main(args):
         gparam_norm = sum([p.grad.norm()**2 for p in model.parameters() 
                            if p.grad is not None]).item()**0.5
         log_str = 'Epoch: %d, Batch: %d/%d, |Param|: %.6f, |GParam|: %.2f,  LR: %.4f, ' + \
-                  'ReconPPL: %.2f, KL: %.4f, PPLBound: %.2f, ValPPL: %.2f, ValF1: %.2f, ' + \
+                  ', ValPPL: %.2f, ValF1: %.2f, ' + \
                   'CorpusF1: %.2f, Throughput: %.2f examples/sec'
         print(log_str %
               (epoch, b, len(train_data), param_norm, gparam_norm, args.lr, 
-               np.exp(train_nll / num_words), train_kl /num_sents, 
-               np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
+               best_val_ppl, best_val_f1, 
                all_f1[0], num_sents / (time.time() - start_time)))
 
 
@@ -219,4 +217,5 @@ def eval(data, model):
 
 if __name__ == '__main__':
   args = parser.parse_args()
+  args.cuda = True
   main(args)

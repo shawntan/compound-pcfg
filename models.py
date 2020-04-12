@@ -68,8 +68,8 @@ class CompPCFG(nn.Module):
 
   def forward(self, inp, trg, argmax=False, use_mean=False):
     #x : batch x n
-    n = inp.size(1)
-    batch_size = inp.size(0)
+    n = trg.size(1)
+    batch_size = trg.size(0)
     z = self.enc(inp)
     self.z = z
 
@@ -90,7 +90,7 @@ class CompPCFG(nn.Module):
                                                          self.z_dim)], 2)
     root_scores = F.log_softmax(self.root_mlp(root_emb), 1)
     unary_scores = F.log_softmax(self.vocab_mlp(t_emb), 3)
-    x_expand = inp.unsqueeze(2).expand(batch_size, n, self.t_states).unsqueeze(3)
+    x_expand = trg.unsqueeze(2).expand(batch_size, n, self.t_states).unsqueeze(3)
     unary = torch.gather(unary_scores, 3, x_expand).squeeze(3)
     rule_score = F.log_softmax(self.rule_mlp(nt_emb), 2) # nt x t**2
     rule_scores = rule_score.view(batch_size, self.nt_states, self.all_states, self.all_states)
