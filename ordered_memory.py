@@ -194,13 +194,8 @@ class OrderedMemory(nn.Module):
 
     def forward(self, input):
         batch_size = input.size(1)
-        input = input[1:]
         mask = (input != self.padding_idx)
-        lengths = mask.sum(0) - 2
-        input[lengths + 1, torch.arange(batch_size)] = self.padding_idx
-        input = input[:-1]
-        mask = mask[:-1]
-
+        lengths = mask.sum(0)
         X = self.embedding(input)
 
         init_hidden = self.init_hidden(batch_size)
@@ -235,14 +230,6 @@ class RNNContextEncoder(nn.Module):
         )
 
     def forward(self, input):
-        batch_size = input.size(1)
-        input = input[1:]
-        mask = (input != self.padding_idx)
-        lengths = mask.sum(0) - 2
-        input[lengths + 1, torch.arange(batch_size)] = self.padding_idx
-        input = input[:-1]
-        mask = mask[:-1]
-
         X = self.embedding(input)
 
         X, X_aux = X.chunk(2, dim=-1)

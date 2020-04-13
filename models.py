@@ -117,7 +117,7 @@ class CompPCFG(nn.Module):
 
         root_emb = root_emb.expand(batch_size, self.state_dim)
         nt_emb = nt_emb.unsqueeze(0).expand(batch_size, self.nt_states, self.state_dim)
-        t_emb = t_emb.unsqueeze(0).unsqueeze(1).expand(batch_size, self.t_states, self.state_dim)
+        t_emb = t_emb.unsqueeze(0).expand(batch_size, self.t_states, self.state_dim)
 
         root_emb = torch.cat([root_emb, z], 1)
         nt_emb = torch.cat([nt_emb, z[:, None].expand(batch_size, self.nt_states, self.z_dim)], 2)
@@ -135,12 +135,12 @@ class CompPCFG(nn.Module):
     def recurse_sample(self, idx, rule_score, unary_score):
         if idx < self.nt_states:
             rule = rule_score[idx].argmax()
-            l_state = rule // self.nt_states
-            r_state = rule % self.nt_states
+            l_state = rule // self.all_states
+            r_state = rule % self.all_states
             l_tree = self.recurse_sample(l_state, rule_score, unary_score)
             r_tree = self.recurse_sample(r_state, rule_score, unary_score)
-            return [l_tree, r_tree]
+            return l_tree + r_tree
         else:
             t_state = idx - self.nt_states
             terminal = unary_score[t_state].argmax()
-            return terminal
+            return [terminal.item()]
