@@ -126,7 +126,6 @@ def main(args):
             inp = inp.to('cuda' if args.cuda else 'cpu').permute(1, 0)
             trg = trg.to('cuda' if args.cuda else 'cpu')
             nll, kl = model(inp, trg)
-            print(nll)
             (nll+kl).mean().backward()
             train_nll += nll.sum().item()
             train_kl += kl.sum().item()
