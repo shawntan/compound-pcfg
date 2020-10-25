@@ -5,6 +5,71 @@ import random
 import torch
 import nltk
 
+def idxs2string(idxs, vocab):
+    string = ""
+    for idx in idxs:
+        if idx == -1:
+            continue
+        word = "UNK" if idx > len(vocab) else vocab[idx]
+        if word == "<pad>":
+            continue
+        elif word == "<end>":
+            string += " " + word
+            break
+        else:
+            string += " " + word
+    return string
+
+
+class ReprWrapper(object):
+    def __init__(self, val):
+        self.val = val
+
+    def __repr__(self):
+        if isinstance(self.val, list):
+            return "[" + repr(self.val[0]) + " " + repr(self.val[1]) + "]"
+        else:
+            if self.val is not None:
+                return self.val
+            else:
+                return "NONE!"
+
+    def unwrap(self):
+        if isinstance(self.val, list):
+            return [self.val[0].unwrap(), self.val[1].unwrap()]
+        else:
+            return self.val
+
+
+def list2tree_inorder(depth):
+    if depth == 0:
+        return [ReprWrapper(None)]
+    else:
+        left_inorder = list2tree_inorder(depth - 1)
+        right_inorder = list2tree_inorder(depth - 1)
+        midpoint = len(left_inorder) // 2
+        new_node = [left_inorder[midpoint], right_inorder[midpoint]]
+        return left_inorder + [ReprWrapper(new_node)] + right_inorder
+
+def idxpos2tree(word_idxs, pos, nodelist,
+                vocab=None,
+                return_wrapper=False,
+                sub_words=None):
+    idxs = word_idxs[:len(pos)]
+    for i, idx in enumerate(idxs):
+        if sub_words is None:
+            nodelist[pos[i]].val = vocab[idx]
+        elif vocab is None:
+            nodelist[pos[i]].val = sub_words[i]
+
+    if return_wrapper:
+        return nodelist[0]
+    else:
+        return repr(nodelist[0])
+
+
+
+
 def all_binary_trees(n):
   #get all binary trees of length n
   def is_tree(tree, n):

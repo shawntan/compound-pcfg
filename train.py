@@ -17,6 +17,7 @@ from data import Dataset
 from utils import *
 from models import CompPCFG
 from torch.nn.init import xavier_uniform_
+from ae import AE
 
 parser = argparse.ArgumentParser()
 
@@ -47,6 +48,21 @@ parser.add_argument('--gpu', default=0, type=int, help='which gpu to use')
 parser.add_argument('--seed', default=3435, type=int, help='random seed')
 parser.add_argument('--print_every', type=int, default=1000, help='print stats after N batches')
 
+def get_brackets(tree, idx=0):
+    brackets = set()
+    if isinstance(tree, list) or isinstance(tree, nltk.Tree):
+        for node in tree:
+            node_brac, next_idx = get_brackets(node, idx)
+            if next_idx - idx > 1:
+                brackets.add((idx, next_idx))
+                brackets.update(node_brac)
+            idx = next_idx
+        return brackets, idx
+    else:
+        return brackets, idx + 1
+
+
+
 def main(args):
   np.random.seed(args.seed)
   torch.manual_seed(args.seed)
@@ -60,13 +76,32 @@ def main(args):
   print('Vocab size: %d, Max Sent Len: %d' % (vocab_size, max_len))
   print('Save Path', args.save_path)
   cuda.set_device(args.gpu)
-  model = CompPCFG(vocab = vocab_size,
-                   state_dim = args.state_dim,
-                   t_states = args.t_states,
-                   nt_states = args.nt_states,
-                   h_dim = args.h_dim,
-                   w_dim = args.w_dim,
-                   z_dim = args.z_dim)
+  if False:
+      model = CompPCFG(vocab = vocab_size,
+                       state_dim = args.state_dim,
+                       t_states = args.t_states,
+                       nt_states = args.nt_states,
+                       h_dim = args.h_dim,
+                       w_dim = args.w_dim,
+                       z_dim = args.z_dim)
+  else:
+      model = AE(
+          input_size=args.state_dim,
+          hidden_size=args.state_dim,
+          ntokens=vocab_size,
+          encoder_type='OM',
+          enc_dropout=0.1,
+          enc_dropouti=0.1,
+          enc_dropoutm=0.1,
+          enc_word_dropout=0.,
+          dec_prod_class='Cell',
+          dec_int_dropout=0.1,
+          dec_leaf_dropout=0.1,
+          dec_out_dropout=0.1,
+          dec_attn_dropout=0.5,
+          dec_min_depth=8, dec_max_depth=30, dec_left_discount=0.5,
+          nslot=10, padding_idx=train_data.word2idx['<pad>'], beta_max=1.
+      )
   for name, param in model.named_parameters():    
     if param.dim() > 1:
       xavier_uniform_(param)
@@ -78,6 +113,8 @@ def main(args):
   best_val_ppl = 1e5
   best_val_f1 = 0
   epoch = 0
+
+  # val_ppl, val_f1 = eval(val_data, model, train_data.idx2word)
   while epoch < args.num_epochs:
     start_time = time.time()
     epoch += 1  
@@ -90,12 +127,13 @@ def main(args):
     b = 0
     for i in np.random.permutation(len(train_data)):
       b += 1
-      sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]      
-      if length > args.max_length or length == 1: #length filter based on curriculum 
+      sents, length, batch_size, _, gold_spans, gold_binary_trees, _ = train_data[i]
+      sent_str = [train_data.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
+      if length > args.max_length or length == 1: #length filter based on curriculum
         continue
       sents = sents.cuda()
       optimizer.zero_grad()
-      nll, kl, binary_matrix, argmax_spans = model(sents, argmax=True)      
+      nll, kl = model(sents, argmax=True)
       (nll+kl).mean().backward()
       train_nll += nll.sum().item()
       train_kl += kl.sum().item()
@@ -103,10 +141,10 @@ def main(args):
       optimizer.step()
       num_sents += batch_size
       num_words += batch_size * (length + 1) # we implicitly generate </s> so we explicitly count it
-      for bb in range(batch_size):
-        span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
-        span_b_set = set(span_b[:-1])
-        update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
+      # for bb in range(batch_size):
+      #   span_b = [(a[0], a[1]) for a in argmax_spans[bb]] #ignore labels
+      #   span_b_set = set(span_b[:-1])
+      #   update_stats(span_b_set, [set(gold_spans[bb][:-1])], all_stats)
       if b % args.print_every == 0:
         all_f1 = get_f1(all_stats)
         param_norm = sum([p.norm()**2 for p in model.parameters()]).item()**0.5
@@ -121,16 +159,19 @@ def main(args):
                np.exp((train_nll + train_kl)/num_words), best_val_ppl, best_val_f1, 
                all_f1[0], num_sents / (time.time() - start_time)))
         # print an example parse
-        tree = get_tree_from_binary_matrix(binary_matrix[0], length)
-        action = get_actions(tree)
+        # tree = get_tree_from_binary_matrix(binary_matrix[0], length)
+        # action = get_actions(tree)
         sent_str = [train_data.idx2word[word_idx] for word_idx in list(sents[0].cpu().numpy())]
-        print("Pred Tree: %s" % get_tree(action, sent_str))
+        # print("Pred Tree: %s" % get_tree(action, sent_str))
         print("Gold Tree: %s" % get_tree(gold_binary_trees[0], sent_str))
+        idxs, nodelist = model.infer(sents[:1])
+        print(idxpos2tree(sents[0].tolist(), idxs[0], nodelist, train_data.idx2word))
+
 
     args.max_length = min(args.final_max_length, args.max_length + args.len_incr)
     print('--------------------------------')
     print('Checking validation perf...')    
-    val_ppl, val_f1 = eval(val_data, model)
+    val_ppl, val_f1 = eval(val_data, model,  train_data.idx2word)
     print('--------------------------------')
     if val_ppl < best_val_ppl:
       best_val_ppl = val_ppl
@@ -145,7 +186,7 @@ def main(args):
       torch.save(checkpoint, args.save_path)
       model.cuda()
 
-def eval(data, model):
+def eval(data, model, idx2word):
   model.eval()
   num_sents = 0
   num_words = 0
@@ -153,45 +194,61 @@ def eval(data, model):
   total_kl = 0.
   corpus_f1 = [0., 0., 0.] 
   sent_f1 = [] 
-  with torch.no_grad():
-    for i in range(len(data)):
-      sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i] 
-      if length == 1:
-        continue
-      sents = sents.cuda()
-      # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
-      # but we don't for eval since we want a valid upper bound on PPL for early stopping
-      # see eval.py for proper MAP inference
-      nll, kl, binary_matrix, argmax_spans = model(sents, argmax=True)
-      total_nll += nll.sum().item()
-      total_kl  += kl.sum().item()
-      num_sents += batch_size
-      num_words += batch_size*(length +1) # we implicitly generate </s> so we explicitly count it
-      for b in range(batch_size):
-        span_b = [(a[0], a[1]) for a in argmax_spans[b]] #ignore labels
-        span_b_set = set(span_b[:-1])        
-        gold_b_set = set(gold_spans[b][:-1])
-        tp, fp, fn = get_stats(span_b_set, gold_b_set) 
-        corpus_f1[0] += tp
-        corpus_f1[1] += fp
-        corpus_f1[2] += fn
-        # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
+  for i in range(len(data)):
+    sents, length, batch_size, _, gold_spans, gold_binary_trees, other_data = data[i]
+    if length == 1:
+      continue
+    sents = sents.cuda()
+    # note that for unsuperised parsing, we should do model(sents, argmax=True, use_mean = True)
+    # but we don't for eval since we want a valid upper bound on PPL for early stopping
+    # see eval.py for proper MAP inference
+    # nll, kl, binary_matrix, argmax_spans = model(sents, argmax=True)
+    nll, kl = model(sents, argmax=True)
+    total_nll += nll.sum().item()
+    total_kl  += kl.sum().item()
+    num_sents += batch_size
+    num_words += batch_size*(length +1) # we implicitly generate </s> so we explicitly count it
+    for b in range(batch_size):
+      idxs, nodelist = model.infer(sents[b:b+1])
+      # print(idxpos2tree(sents[0].tolist(), idxs[0], nodelist, train_data.idx2word))
+      root = idxpos2tree(sents[b].tolist(), idxs[0], nodelist,
+                         idx2word,
+                         return_wrapper=True)
+      span_b_set, _ = get_brackets(root.unwrap())
+      span_b_set = {(x, y - 1) for x,y in span_b_set}
+      # gold_tree = get_tree(gold_binary_trees[b],
+      #                     [idx2word[word_idx]
+      #                      for word_idx in list(sents[b].cpu().numpy())])
+      #span_b_set = set(span_b[:-1])
+      gold_b_set = set(gold_spans[b][:-1])
+      # print("Gold:", gold_b_set)
+      # gold_b_set = set(gold_spans[b])
+#      print("Gold:", gold_b_set)
+#      print(gold_tree)
+#      print("Pred:", span_b_set)
+#      print(root)
+      # print()
+      tp, fp, fn = get_stats(span_b_set, gold_b_set)
+      corpus_f1[0] += tp
+      corpus_f1[1] += fp
+      corpus_f1[2] += fn
+      # sent-level F1 is based on L83-89 from https://github.com/yikangshen/PRPN/test_phrase_grammar.py
 
-        model_out = span_b_set
-        std_out = gold_b_set
-        overlap = model_out.intersection(std_out)
-        prec = float(len(overlap)) / (len(model_out) + 1e-8)
-        reca = float(len(overlap)) / (len(std_out) + 1e-8)
-        if len(std_out) == 0:
-          reca = 1. 
-          if len(model_out) == 0:
-            prec = 1.
-        f1 = 2 * prec * reca / (prec + reca + 1e-8)
-        sent_f1.append(f1)
+      model_out = span_b_set
+      std_out = gold_b_set
+      overlap = model_out.intersection(std_out)
+      prec = float(len(overlap)) / (len(model_out) + 1e-8)
+      reca = float(len(overlap)) / (len(std_out) + 1e-8)
+      if len(std_out) == 0:
+        reca = 1. 
+        if len(model_out) == 0:
+          prec = 1.
+      f1 = 2 * prec * reca / (prec + reca + 1e-8)
+      sent_f1.append(f1)
   tp, fp, fn = corpus_f1  
   prec = tp / (tp + fp)
   recall = tp / (tp + fn)
-  corpus_f1 = 2*prec*recall/(prec+recall) if prec+recall > 0 else 0.
+  corpus_f1 = 2 * prec * recall/(prec + recall) if prec+recall > 0 else 0.
   sent_f1 = np.mean(np.array(sent_f1))
   recon_ppl = np.exp(total_nll / num_words)
   ppl_elbo = np.exp((total_nll + total_kl)/num_words) 
